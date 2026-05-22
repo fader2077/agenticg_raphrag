@@ -1,0 +1,16 @@
+
+# Secrets
+.env
+.env.*
+*.key
+*api_key*
+vg_graphragVG/tools/api
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
