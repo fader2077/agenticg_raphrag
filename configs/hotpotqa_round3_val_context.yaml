@@ -1,0 +1,91 @@
+experiment:
+  name: hotpotqa_round3_val_context
+  benchmark_mode: validation_context
+  dataset_id: hotpotqa/hotpot_qa
+  subset: distractor
+  random_seed: 42
+
+data:
+  eval_split: validation
+  eval_fraction: 0.10
+  eval_sample_strategy: random
+  corpus_source: eval_contexts
+  persist_sample_ids: true
+  processed_base_dir: data/processed/hotpotqa_round3_val_context
+
+graph:
+  graph_run_id: hotpotqa_val10_context_graph_v1
+  build_from: eval_contexts
+  reuse_existing_graph: true
+  rebuild_if_config_changed: true
+  fulltext_index_name: hotpotqa_val10_context_chunk_fts_v1
+  extractor:
+    mode: deterministic
+    use_llm_extraction: false
+    llm_model: qwen2.5:7b-instruct-fp16
+    extraction_temperature: 0.0
+
+indexing:
+  chunking:
+    max_sentences_per_chunk: 3
+    overlap_sentences: 1
+  text_index:
+    enabled: true
+    backend: bm25_or_neo4j_fulltext
+    dir: data/indexes/hotpotqa_round3_val_context/text
+  vector_index:
+    enabled: true
+    backend: ollama_embeddings
+    embed_model: nomic-embed-text:latest
+    fallback_to_fulltext: false
+    dir: data/indexes/hotpotqa_round3_val_context/vector
+  graph_artifact_dir: data/indexes/hotpotqa_round3_val_context/graph
+
+retrieval:
+  top_k_text: 10
+  top_k_vector: 10
+  top_k_graph_paths: 5
+  graph_hop1_depth: 1
+  graph_hop2_depth: 2
+  max_nodes_per_hop: 10
+
+generation:
+  provider: ollama
+  qa_model: qwen2.5:7b-instruct-fp16
+  ollama_host: http://localhost:11434
+  temperature: 0.0
+  max_context_tokens: 6000
+  deterministic_fallback_enabled: true
+  deterministic_fallback_name: deterministic_evidence_sentence_v1
+  use_deterministic_for_main_eval: false
+
+agent:
+  controller: vg_compatible_bounded_deterministic_v1
+  max_tool_calls: 10
+  max_repair_rounds: 1
+  max_graph_depth: 2
+  verifier_enabled: true
+  repair_enabled: true
+  use_vg_graphrag_abstractions: true
+  vg_graphrag_integration_mode: adapter_first
+  vg_skill_profile_path: vg_graphrag/domains/goat/skill_profile.json
+  skills:
+    - question_analysis_skill
+    - text_retrieval_skill
+    - vector_retrieval_skill
+    - graph_retrieval_skill
+    - evidence_fusion_skill
+    - grounded_answering_skill
+    - repair_skill
+
+judge:
+  binary_judge_enabled: true
+  openai_judge_enabled: false
+  api_key_file: C:\Users\kbllm\Downloads\api.txt
+  openai_judge_sample_size_per_method: 200
+  continue_on_judge_error: true
+
+output:
+  run_dir: runs/hotpotqa_round3_val_context
+  report_zh: reports/HOTPOTQA_ROUND3_VAL_CONTEXT_REPORT_ZH.md
+  report_en: reports/HOTPOTQA_ROUND3_VAL_CONTEXT_REPORT_EN.md

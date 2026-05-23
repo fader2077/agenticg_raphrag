@@ -1,0 +1,74 @@
+experiment:
+  name: hotpotqa_round1
+  dataset: hotpotqa
+  setting: distractor
+  sample_size: 500
+  random_seed: 42
+  methods:
+    - LLM-only
+    - TextRAG
+    - VectorRAG
+    - GraphRAG-hop1
+    - GraphRAG-hop2
+    - AgenticGraphRAG
+
+data:
+  processed_dir: data/processed/hotpotqa
+  include_supporting_facts: true
+
+indexing:
+  chunking: sentence_aware
+  max_sentences_per_chunk: 3
+  overlap_sentences: 1
+  text_index_dir: data/indexes/hotpotqa/text
+  vector_index_dir: data/indexes/hotpotqa/vector
+  graph_index_dir: data/indexes/hotpotqa/graph
+  vector_backend: tfidf_char
+
+retrieval:
+  top_k_text: 10
+  top_k_vector: 10
+  top_k_graph_paths: 5
+  graph_depth_hop1: 1
+  graph_depth_hop2: 2
+  max_nodes_per_hop: 10
+  reranker_enabled: false
+
+agent:
+  max_tool_calls: 10
+  max_repair_rounds: 1
+  max_graph_depth: 2
+  verifier_enabled: true
+  allowed_routes:
+    - text_search
+    - vector_search
+    - graph_expand
+
+generation:
+  temperature: 0
+  max_context_tokens: 6000
+  require_citations: true
+
+judge:
+  enabled: true
+  api_key_file: "C:\\Users\\kbllm\\Downloads\\api.txt"
+  binary_judge_file: judge_binary_correctness.py
+  openai_judge_file: judge_openai.py
+  continue_on_judge_error: true
+  external_calls_env: HOTPOTQA_RUN_OPENAI_JUDGE_CALLS
+
+evaluation:
+  metrics:
+    - em
+    - f1
+    - supporting_fact_precision
+    - supporting_fact_recall
+    - supporting_fact_f1
+    - gold_title_recall
+    - mrr
+    - ndcg
+    - path_recall
+    - judge_binary_accuracy
+    - openai_judge_score_mean
+    - tool_calls
+    - latency
