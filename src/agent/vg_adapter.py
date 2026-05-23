@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import re
+
 from vg_graphrag.models import AgentState as VGAgentState
-from vg_graphrag.models import QueryAnalysis, RunConfig, ToolResult
-from vg_graphrag.pipeline.analyzer import analyze_query
+from vg_graphrag.models import QueryAnalysis, QueryEntity, RunConfig, ToolResult
 from vg_graphrag.pipeline.executor import execute_plan
 from vg_graphrag.pipeline.planner import create_dual_channel_plan
 from vg_graphrag.runtime_skill import load_runtime_skill
@@ -55,6 +56,67 @@ class VGExecutionBundle:
     config: RunConfig
     modules_called: list[str]
     adapters_used: list[str]
+
+
+def _extract_entities(question: str) -> list[QueryEntity]:
+    """Extract lightweight HotpotQA entities without domain-specific hints."""
+    entities: list[QueryEntity] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"\b[A-Z][A-Za-z0-9'&.-]*(?:\s+[A-Z][A-Za-z0-9'&.-]*){0,5}\b", question or ""):
+        text = match.group(0).strip()
+        key = text.lower()
+        if key in {"what", "which", "who", "when", "where", "how", "the"}:
+            continue
+        if key not in seen:
+            seen.add(key)
+            entities.append(QueryEntity(text=text))
+    return entities
+
+
+def build_hotpot_vg_analysis(question: str, question_id: str, graph_run_id: str, runtime_skill: dict[str, Any] | None = None) -> QueryAnalysis:
+    """Create a HotpotQA-native VG analysis object without domain/family heuristics."""
+    ql = (question or "").lower()
+    if any(x in ql for x in ["same", "both", "compared", "compare", "older", "larger", "shared"]):
+        query_type = "comparison"
+        expected_hops = 1
+    elif any(x in ql for x in ["who", "what was", "what is the", "when did", "where is the"]) and any(x in ql for x in ["that", "which", "whose", "located", "inspired", "part of"]):
+        query_type = "multi_hop"
+        expected_hops = 2
+    elif any(x in ql for x in ["why", "evidence", "support", "reason", "connection", "mechanism", "path"]):
+        query_type = "evidence_demanding"
+        expected_hops = 2
+    else:
+        query_type = "single_hop"
+        expected_hops = 1
+    answer_slot = "date" if any(x in ql for x in ["when", "year", "date"]) else "location" if any(x in ql for x in ["where", "located", "city", "country"]) else "person" if "who" in ql else "other"
+    entities = _extract_entities(question)
+    alias_terms = [e.text for e in entities]
+    return QueryAnalysis(
+        query_type=query_type,
+        entities=entities,
+        constraints={
+            "canonical_terms": alias_terms,
+            "alias_terms": alias_terms,
+            "target_entities": alias_terms,
+            "relation_terms": [],
+            "diagnostic_focus": [answer_slot] if answer_slot != "other" else [],
+            "runtime_skill": dict(runtime_skill or {}),
+            "graph_run_id": graph_run_id,
+            "question_id": question_id,
+            "family_registry_mode": "disabled_for_hotpotqa",
+            "allow_static_family_registry": False,
+            "enable_runtime_candidate_families": False,
+            "use_goat_fallback_family_specs": False,
+            "evaluation_mode": True,
+            "graph_reliance_mode": "graph_evidence_allowed",
+            "generic_agentic_only": True,
+            "disable_domain_patterns": True,
+        },
+        expected_hops=expected_hops,
+        needs_text_evidence=True,
+        requires_citations=True,
+        answer_slot=answer_slot,
+    )
 
 
 class _BaseAdapter:
@@ -200,15 +262,7 @@ def run_vg_planner_pass(
 ) -> VGExecutionBundle:
     """Execute the reusable VG analyzer/planner/executor stack via HotpotQA adapters."""
     runtime_skill = load_runtime_skill(skill_profile_path)
-    metadata = {
-        "runtime_skill": runtime_skill,
-        "graph_run_id": graph_run_id,
-        "question_id": question_id,
-        "evaluation_mode": True,
-        "generic_agentic_only": True,
-        "graph_reliance_mode": "graph_evidence_allowed",
-    }
-    analysis = analyze_query(question, metadata)
+    analysis = build_hotpot_vg_analysis(question, question_id, graph_run_id, runtime_skill=runtime_skill)
     config = RunConfig(
         max_tool_calls=max_tool_calls,
         max_hops=max_hops,
@@ -241,9 +295,9 @@ def run_vg_planner_pass(
         config=config,
         modules_called=[
             "vg_graphrag.runtime_skill.load_runtime_skill",
-            "vg_graphrag.pipeline.analyzer.analyze_query",
             "vg_graphrag.pipeline.planner.create_dual_channel_plan",
             "vg_graphrag.pipeline.executor.execute_plan",
+            "src.agent.vg_adapter.build_hotpot_vg_analysis",
         ],
         adapters_used=[
             "VGTextSearchToolAdapter",

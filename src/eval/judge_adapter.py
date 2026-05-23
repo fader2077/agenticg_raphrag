@@ -78,6 +78,8 @@ def judge_binary_correctness(
         import openai
 
         client = openai.OpenAI(api_key=key)
+        if hasattr(mod, "JUDGE_MODEL"):
+            mod.JUDGE_MODEL = "gpt-5-mini"
         out = mod.call_one(client, _judge_record(question, gold_answer, pred_answer))
         return {
             "binary_correct": out.get("binary_correct"),
@@ -123,6 +125,8 @@ def judge_openai_correctness(
         import openai
 
         client = openai.OpenAI(api_key=key)
+        if hasattr(mod, "JUDGE_MODEL"):
+            mod.JUDGE_MODEL = "gpt-5-mini"
         out = mod.call_judge(client, _judge_record(question, gold_answer, pred_answer))
         score = out.get("llm_f1")
         label = "correct" if score is not None and float(score) >= 0.8 else "partial" if score is not None and float(score) > 0 else "incorrect"

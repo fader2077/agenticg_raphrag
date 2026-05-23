@@ -23,6 +23,7 @@ class AgentState:
     retrieved_paths: list[dict[str, Any]] = field(default_factory=list)
     verifier: dict[str, Any] = field(default_factory=dict)
     repair_rounds: int = 0
+    analysis: dict[str, Any] = field(default_factory=dict)
     vg_graphrag_integration: dict[str, Any] = field(
         default_factory=lambda: {
             "vg_graphrag_reference_used": False,

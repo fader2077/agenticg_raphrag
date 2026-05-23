@@ -80,9 +80,10 @@ agent:
 
 judge:
   binary_judge_enabled: true
-  openai_judge_enabled: false
+  openai_judge_enabled: true
   api_key_file: C:\Users\kbllm\Downloads\api.txt
-  openai_judge_sample_size_per_method: 200
+  openai_judge_sample_size_per_method: 10
+  binary_judge_sample_size_per_method: 10
   continue_on_judge_error: true
 
 output:

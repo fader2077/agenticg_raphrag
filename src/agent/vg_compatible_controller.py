@@ -17,6 +17,9 @@ from src.agent.state import AgentState
 from src.agent.tools import call_tool
 from src.agent.verifier import verify_answer
 from src.generation.answer_generator import AnswerGenerator
+from vg_graphrag.models import ChannelEvidence, LogicDraft
+from vg_graphrag.pipeline.query_expansion import expand_queries
+from vg_graphrag.pipeline.self_reflection import build_self_reflection
 
 
 class AgenticGraphRAGController:
@@ -80,6 +83,7 @@ class AgenticGraphRAGController:
             "controller_backend": "vg_compatible_bounded_deterministic_v1",
             "integration_status": "adapter_integrated",
         }
+        stage_answer_trace: list[dict[str, Any]] = []
         agent_cfg = self.config.get("agent", {})
 
         analysis = call_tool(state.tool_trace, "question_analysis_skill", self.question_analysis_skill.run, question, state)
@@ -115,6 +119,15 @@ class AgenticGraphRAGController:
         graph_chunks = graph_result.get("graph_evidence_chunks", [])
         fused = call_tool(state.tool_trace, "evidence_fusion_skill", self.fusion_skill.run, text_chunks, vector_chunks, graph_chunks, state)
         generated = call_tool(state.tool_trace, "grounded_answering_skill", self.answering_skill.run, question, fused, state)
+        stage_answer_trace.append(
+            {
+                "stage": "initial_answer",
+                "answer": generated.get("answer"),
+                "citations": generated.get("citations", []),
+                "fallback_used": generated.get("fallback_used"),
+                "generation_error": generated.get("generation_error"),
+            }
+        )
         verifier = {"verdict": "not_run", "unsupported_claims": [], "required_missing_evidence": [], "trace": {}}
         verifier_enabled = bool(agent_cfg.get("verifier_enabled", True)) and ablation != "no_verifier"
         if verifier_enabled:
@@ -130,25 +143,86 @@ class AgenticGraphRAGController:
         ):
             repaired = True
             state.repair_rounds += 1
-            repaired_payload = call_tool(
-                state.tool_trace,
-                "repair_skill",
-                self.repair_skill.run,
+            analysis_dict = state.analysis if isinstance(state.analysis, dict) else {}
+            qe_source = ChannelEvidence(
+                subquery_id=state.qid,
+                grounded_query=question,
+                semantic_evidence=[{"chunk": chunk, "text": chunk.get("text", "")} for chunk in fused[:8]],
+                relational_evidence=[{"path": path, "edges": path.get("edges", []), "nodes": path.get("nodes", [])} for path in graph_result.get("retrieved_paths", [])[:5]],
+                semantic_summary=" ".join((chunk.get("text", "") or "")[:120] for chunk in fused[:3]),
+                relational_summary=" ".join(" -> ".join(path.get("nodes", [])) for path in graph_result.get("retrieved_paths", [])[:3]),
+                missing=list(verifier.get("required_missing_evidence", []) or []),
+            )
+            reflection = build_self_reflection(
                 question,
-                generated["answer"],
-                fused,
-                state,
+                vg_bundle.analysis if vg_bundle is not None else type("A", (), {"query_type": analysis_dict.get("query_type", "single_hop"), "answer_slot": analysis_dict.get("answer_slot", "other"), "constraints": {"canonical_terms": analysis_dict.get("entities", []), "alias_terms": analysis_dict.get("entities", [])}})(),
+                [qe_source],
+                LogicDraft(reasoning_steps=[], intermediate_answers={}, evidence_gaps={}, draft_answer=str(generated.get("answer", ""))),
+                type(
+                    "VerifierLike",
+                    (),
+                    {
+                        "missing_information": list(verifier.get("required_missing_evidence", []) or []),
+                        "missing_evidence_map": {state.qid: list(verifier.get("required_missing_evidence", []) or [])},
+                        "failure_modes": list(verifier.get("unsupported_claims", []) or []),
+                    },
+                )(),
             )
             state.repair_trace.append(
                 {
                     "round": state.repair_rounds,
                     "reason": verifier.get("verdict"),
+                    "self_reflection": {
+                        "understanding_question": reflection.understanding_question,
+                        "analysis_selected_evidence": reflection.analysis_selected_evidence,
+                        "improved_strategy": reflection.improved_strategy,
+                        "updated_focus_terms": reflection.updated_focus_terms,
+                        "preferred_tools": reflection.preferred_tools,
+                    },
+                }
+            )
+            expanded_queries = expand_queries(
+                question,
+                [qe_source],
+                type(
+                    "VerifierLike",
+                    (),
+                    {
+                        "missing_information": list(verifier.get("required_missing_evidence", []) or []),
+                        "missing_evidence_map": reflection.missing_evidence_map or {state.qid: list(verifier.get("required_missing_evidence", []) or [])},
+                        "failure_modes": list(verifier.get("unsupported_claims", []) or []),
+                    },
+                )(),
+                analysis=vg_bundle.analysis if vg_bundle is not None else None,
+                max_new=2,
+            )
+            repaired_payload = call_tool(
+                state.tool_trace,
+                "repair_skill",
+                self.repair_skill.run,
+                " ".join([question] + [sq.text for sq in expanded_queries]).strip(),
+                generated["answer"],
+                fused,
+                state,
+            )
+            state.repair_trace[-1].update(
+                {
+                    "expanded_queries": [sq.text for sq in expanded_queries],
                     "repair_query": repaired_payload.get("repair_query"),
                     "repair_chunk_count": len(repaired_payload.get("repair_chunks", [])),
                 }
             )
             fused = repaired_payload["repaired_evidence"]
             generated = repaired_payload["generation"]
+            stage_answer_trace.append(
+                {
+                    "stage": f"repair_answer_{state.repair_rounds}",
+                    "answer": generated.get("answer"),
+                    "citations": generated.get("citations", []),
+                    "fallback_used": generated.get("fallback_used"),
+                    "generation_error": generated.get("generation_error"),
+                }
+            )
             verifier = call_tool(state.tool_trace, "evidence_verify", verify_answer, question, generated["answer"], fused)
             state.verifier_trace.append({"round": state.repair_rounds, **verifier})
         state.retrieved_chunks = fused
@@ -171,5 +245,6 @@ class AgenticGraphRAGController:
             "tools_used": state.tools_used,
             "skills_used": state.skills_used,
             "vg_graphrag_integration": state.vg_graphrag_integration,
+            "stage_answer_trace": stage_answer_trace,
             "generation": generated,
         }

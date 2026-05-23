@@ -272,7 +272,7 @@ def _gold_evidence_presence(staged_cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def _judge_plan(staged_cfg: dict[str, Any], questions: list[dict[str, Any]]) -> dict[str, list[str]]:
-    size = int(staged_cfg["judge"].get("openai_judge_sample_size_per_method", 200))
+    size = int(max(staged_cfg["judge"].get("openai_judge_sample_size_per_method", 0), staged_cfg["judge"].get("binary_judge_sample_size_per_method", 0)))
     qids = [str(q.get("qid")) for q in questions]
     plan: dict[str, list[str]] = {}
     for idx, method in enumerate(METHODS):
@@ -441,19 +441,22 @@ def _run_methods(staged_cfg: dict[str, Any], index_info: dict[str, Any]) -> Path
                                 "pipeline_version": result.get("pipeline_version"),
                                 "tools_used": result.get("tools_used", []),
                                 "skills_used": result.get("skills_used", []),
+                                "stage_answer_trace": result.get("stage_answer_trace", []),
                                 "repair_trace": result.get("repair_trace", []),
                                 "verifier_trace": result.get("verifier_trace", []),
                                 "vg_graphrag_integration": result.get("vg_graphrag_integration", {}),
                             }
                         )
                     pred_answer = str(gen.get("answer") or "insufficient evidence")
-                    openai_sampled = bool(staged_cfg["judge"].get("openai_judge_enabled", False)) and qid in set(judge_plan[method])
+                    judge_sampled = qid in set(judge_plan[method])
+                    openai_sampled = bool(staged_cfg["judge"].get("openai_judge_enabled", False)) and judge_sampled
+                    binary_sampled = bool(staged_cfg["judge"].get("binary_judge_enabled", False)) and judge_sampled
                     judge = judge_prediction(
                         str(question.get("question", "")),
                         str(question.get("answer", "")),
                         pred_answer,
                         chunks,
-                        external_binary_enabled=False,
+                        external_binary_enabled=binary_sampled,
                         external_openai_enabled=openai_sampled,
                     )
                     if judge.get("judge_error"):
@@ -468,6 +471,8 @@ def _run_methods(staged_cfg: dict[str, Any], index_info: dict[str, Any]) -> Path
                         "generation_error": gen.get("generation_error"),
                     }
                     extra["generation_trace"] = generation_trace
+                    extra["judge_sampled_for_binary"] = binary_sampled
+                    extra["judge_sampled_for_openai"] = openai_sampled
                     row = _prediction(
                         method,
                         question,
@@ -510,6 +515,7 @@ def _run_methods(staged_cfg: dict[str, Any], index_info: dict[str, Any]) -> Path
                                 "tools_used": extra.get("tools_used", []),
                                 "skills_used": extra.get("skills_used", []),
                                 "vg_graphrag_integration": extra.get("vg_graphrag_integration", {}),
+                                "stage_answer_trace": extra.get("stage_answer_trace", []),
                                 "tool_trace": tool_trace,
                                 "repair_trace": extra.get("repair_trace", []),
                                 "verifier_trace": extra.get("verifier_trace", []),
